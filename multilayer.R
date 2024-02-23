@@ -132,6 +132,31 @@ subjects <- c(
   "sg_010"
 )
 
+TIV <- c(
+  1530.42,
+  1417.24,
+  1440.27,
+  1470.88,
+  1353.45,
+  1480.66,
+  1409.18,
+  1400.15,
+  1361.40,
+  1482.63,
+  1702.60,
+  1633.97,
+  1337.13,
+  1413.97,
+  1582.01,
+  1538.63,
+  1589.39,
+  1399.34,
+  1491.61,
+  1582.49,
+  1302.83,
+  1427.94
+)
+
 
 multilayer_EC_diff_bu <- multilayer_EC_gen_bu - multilayer_EC_con_bu
 rownames(multilayer_EC_diff_bu) <- subjects
@@ -142,33 +167,69 @@ colnames(multilayer_EC_diff_bu) <- regions
 library(glmnet)
 library(caret)
 library(recipes)
+library(ROCR)
+library(vip)
 
 data_subjects_bu <- rio::import("H:/MEGAGING/data/list_subjects.xlsx") %>%
   merge(., multilayer_EC_diff_bu %>% mutate(ID = rownames(.)), by = "ID") %>%
-  mutate(gender = ifelse(gender == "M", -0.5, 0.5)) # Gender
+  mutate(gender = ifelse(gender == "M", -0.5, 0.5))
 
 data_full_bu <- data_subjects_bu[, c(
-  5, # MMSE
-  7:8, # HAD A + D
   15:76 # Multilayer EC
-)] %>%
-  scale() %>%
-  as.data.frame() %>%
+)] %>% scale() %>% as.data.frame() %>%
   cbind(
     age_group = data_subjects_bu$age_group,
-    gender = data_subjects_bu$gender
+    gender = data_subjects_bu$gender,
+    TIV = as.numeric(scale(TIV)),
+    MMSE = as.numeric(scale(data_subjects_bu$MMSE)),
+    HAD_A = as.numeric(scale(data_subjects_bu$HAD_A)),
+    HAD_D = as.numeric(scale(data_subjects_bu$HAD_D))
   ) %>%
   relocate(., age_group, .before = colnames(.)[1]) %>%
-  relocate(., gender, .before = colnames(.)[2])
+  relocate(., gender, .before = colnames(.)[2]) %>% 
+  relocate(., TIV, .after = colnames(.)[3])
 
+# Separate predictors and target variable
 x_bu <- model.matrix(age_group ~ ., data_full_bu)[, -1] # discard intercept
 y_bu <- data_full_bu$age_group %>%
   as.factor() %>%
   relevel(., ref = "Y")
 
+
 # Do 10 repeats of 5-fold stratified CV with a grid search across 50 values for λ and alpha
 set.seed(2)
-nearZeroVar(data_full_bu, saveMetrics = TRUE)
+# nearZeroVar(data_full_bu, saveMetrics = TRUE)
+
+# Threshold-dependent ----
+# cv_glmnet_bu <- caret::train(
+#   x = x_bu,
+#   y = y_bu,
+#   family = "binomial",
+#   method = "glmnet",
+#   trControl = trainControl(
+#     method = "repeatedcv",
+#     index = createFolds(factor(y_bu), 5, returnTrain = T),
+#     number = 5,
+#     repeats = 10,
+#     # The AUC is used to evaluate the classifier to avoid having to make decisions about the classification threshold.
+#     summaryFunction = twoClassSummary, 
+#     classProbs = T,
+#   ),
+#   metric = "Accuracy",
+#   tuneLength = 50
+# )
+
+# Evaluate model performance
+# confusion_matrix <- confusionMatrix(
+#   data = relevel(predict(cv_glmnet_bu, x_bu, "raw"), ref = "Y"),
+#   reference = relevel(y_bu, ref = "Y"),
+#   mode = "everything"
+# )
+
+# Threshold-invariant approach ----
+# Set seed for reproducibility
+set.seed(2)
+# Train the model with caret::train
 cv_glmnet_bu <- caret::train(
   x = x_bu,
   y = y_bu,
@@ -176,44 +237,58 @@ cv_glmnet_bu <- caret::train(
   method = "glmnet",
   trControl = trainControl(
     method = "repeatedcv",
-    index = createFolds(factor(y_bu), 5, returnTrain = T),
+    index = createFolds(factor(y_bu), 5, returnTrain = TRUE),
     number = 5,
-    repeats = 10
+    repeats = 10,
+    summaryFunction = twoClassSummary, # Use AUC for evaluation
+    classProbs = TRUE # Enable class probabilities
   ),
+  metric = "ROC", # Use ROC as the primary metric
   tuneLength = 50
 )
 
-cv_glmnet_bu$results %>%
-  filter(alpha == cv_glmnet_bu$bestTune$alpha, lambda == cv_glmnet_bu$bestTune$lambda)
-
-confusionMatrix(
-  data = relevel(predict(cv_glmnet_bu, x_bu, "raw"), ref = "Y"),
-  reference = relevel(y_bu, ref = "Y"),
-  mode = "everything"
-)
-
-cv_glmnet_prob_bu <- predict(cv_glmnet_bu, x_bu, "prob")$Y
-pacman::p_load(ROCR)
-perf_bu <- prediction(cv_glmnet_prob_bu, y_bu) %>%
-  performance(measure = "tpr", x.measure = "fpr")
 # Plot ROC curve
-plot(perf_bu, col = "blue", lty = 1)
+library(pROC)
+cv_glmnet_prob_bu <- predict(cv_glmnet_bu, x_bu, "prob")$Y
+roc_curve <- roc(data_full_bu$age_group, cv_glmnet_prob_bu)
+auc_score <- auc(roc_curve)
+plot(roc_curve, col = "blue", lty = 1, main = "ROC Curve", xlab = "False Positive Rate", ylab = "True Positive Rate")
 
+# Print AUC
+cat("AUC:", auc_score, "\n")
 
-# Retrieve the model coefficients
-elastic_bu <- glmnet(x_bu, y_bu,
+# Retrieve the best model's hyperparameters
+best_alpha <- cv_glmnet_bu$bestTune$alpha
+best_lambda <- cv_glmnet_bu$bestTune$lambda
+best_results <- cv_glmnet_bu$results %>%
+  filter(alpha == best_alpha, lambda == best_lambda)
+
+# Print the best hyperparameters
+cat("Best Alpha:", best_alpha, "\n")
+cat("Best Lambda:", best_lambda, "\n")
+cat("Best Results:", "\n")
+print(best_results)
+
+# Fit the final model with the best hyperparameters
+elastic_bu <- glmnet(
+  x_bu,
+  y_bu,
   family = "binomial",
-  alpha = cv_glmnet_bu$bestTune$alpha,
-  lambda = cv_glmnet_bu$bestTune$lambda,
-  standardize = F # the dataset was already preprocessed
+  alpha = best_alpha,
+  lambda = best_lambda,
+  standardize = FALSE  # the dataset was already preprocessed
 )
 
-# predict(elastic_bu, x_bu, type = "class")
-# predict(elastic_bu, x_bu, type = "response")
-# predict(elastic_bu, x_bu, type = "link")
-# Feature importance
-vip::vip(cv_glmnet_bu, num_features = 10, geom = "col") + ggtitle("Feature Importance")
-coef(elastic_bu)
+# Visualize feature importance
+library(ggplot2)
+library(vip)
+vip_plot <- vip(cv_glmnet_bu, num_features = 3, geom = "col", title = "Top 3 Feature Importance")
+vip_plot + theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  labs(x = "Feature Importance", y = "Features")
+
+# Print coefficients
+cat("Model Coefficients:\n")
+print(coef(elastic_bu))
 
 data_full_bu %>%
   group_by(age_group) %>%
