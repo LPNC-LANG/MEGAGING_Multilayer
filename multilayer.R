@@ -41,123 +41,7 @@ multilayer_EC_con_bu <- rbindlist(lapply(multilayer_EC_list_con_bu, as.data.tabl
 # muxViz::plot_multiplex(layers, layout = "auto",
 #                        layer.colors = c("red", "blue", "green", "black", "orange", "purple"))
 
-
-regions <- c(
-  "caudalanteriorcingulate L",
-  "caudalanteriorcingulate R",
-  "caudalmiddlefrontal L",
-  "caudalmiddlefrontal R",
-  "cuneus L",
-  "cuneus R",
-  "entorhinal L",
-  "entorhinal R",
-  "fusiform L",
-  "fusiform R",
-  "inferiorparietal L",
-  "inferiorparietal R",
-  "inferiortemporal L",
-  "inferiortemporal R",
-  "insula L",
-  "insula R",
-  "isthmuscingulate L",
-  "isthmuscingulate R",
-  "lateraloccipital L",
-  "lateraloccipital R",
-  "lateralorbitofrontal L",
-  "lateralorbitofrontal R",
-  "lingual L",
-  "lingual R",
-  "medialorbitofrontal L",
-  "medialorbitofrontal R",
-  "middletemporal L",
-  "middletemporal R",
-  "paracentral L",
-  "paracentral R",
-  "parahippocampal L",
-  "parahippocampal R",
-  "parsopercularis L",
-  "parsopercularis R",
-  "parsorbitalis L",
-  "parsorbitalis R",
-  "parstriangularis L",
-  "parstriangularis R",
-  "pericalcarine L",
-  "pericalcarine R",
-  "postcentral L",
-  "postcentral R",
-  "posteriorcingulate L",
-  "posteriorcingulate R",
-  "precentral L",
-  "precentral R",
-  "precuneus L",
-  "precuneus R",
-  "rostralanteriorcingulate L",
-  "rostralanteriorcingulate R",
-  "rostralmiddlefrontal L",
-  "rostralmiddlefrontal R",
-  "superiorfrontal L",
-  "superiorfrontal R",
-  "superiorparietal L",
-  "superiorparietal R",
-  "superiortemporal L",
-  "superiortemporal R",
-  "supramarginal L",
-  "supramarginal R",
-  "transversetemporal L",
-  "transversetemporal R"
-)
-
-subjects <- c(
-  "bm_014",
-  "ca_001",
-  "ca_019",
-  "cc_007",
-  "cm_013",
-  "co_006",
-  "dm_022",
-  "ds_021",
-  "el_018",
-  "gb_020",
-  "gh_017",
-  "gp_011",
-  "gv_005",
-  "lf_012",
-  "lr_008",
-  "mp_004",
-  "pe_009",
-  "pl_016",
-  "pr_015",
-  "ra_003",
-  "re_002",
-  "sg_010"
-)
-
-TIV <- c(
-  1530.42,
-  1417.24,
-  1440.27,
-  1470.88,
-  1353.45,
-  1480.66,
-  1409.18,
-  1400.15,
-  1361.40,
-  1482.63,
-  1702.60,
-  1633.97,
-  1337.13,
-  1413.97,
-  1582.01,
-  1538.63,
-  1589.39,
-  1399.34,
-  1491.61,
-  1582.49,
-  1302.83,
-  1427.94
-)
-
-
+source("H:/MEGAGING/data/metadata.R")
 multilayer_EC_diff_bu <- multilayer_EC_gen_bu - multilayer_EC_con_bu
 rownames(multilayer_EC_diff_bu) <- subjects
 colnames(multilayer_EC_diff_bu) <- regions
@@ -174,7 +58,7 @@ data_subjects_bu <- rio::import("H:/MEGAGING/data/list_subjects.xlsx") %>%
   merge(., multilayer_EC_diff_bu %>% mutate(ID = rownames(.)), by = "ID") %>%
   mutate(gender = ifelse(gender == "M", -0.5, 0.5))
 
-data_full_bu <- data_subjects_bu[, c(
+data_full_tmp <- data_subjects_bu[, c(
   15:76 # Multilayer EC
 )] %>% scale() %>% as.data.frame() %>%
   cbind(
@@ -187,8 +71,31 @@ data_full_bu <- data_subjects_bu[, c(
   ) %>%
   relocate(., age_group, .before = colnames(.)[1]) %>%
   relocate(., gender, .before = colnames(.)[2]) %>% 
-  relocate(., TIV, .after = colnames(.)[3])
+  relocate(., TIV, .before = colnames(.)[3])
 
+# Regress out nuisance variables ----
+# Script converted from matlab script from Thomas Yeo's lab
+source("H:/MEGAGING/code/Multilayer_LP/CBIG_glm_regress_matrix.R")
+res <- CBIG_glm_regress_matrix(
+  input_mtx = as.matrix(data_full_tmp[,4:65]),
+  regressor = as.matrix(data_full_tmp[,c("TIV","gender","MMSE","HAD_A","HAD_D")]),
+  polynomial_fit = 0)
+
+# This does the same thing
+# res_list = list()
+# for (feature in 4:65){
+#   mod <- lm(data_full_tmp[,feature] ~ 
+#               data_full_tmp$gender + 
+#               data_full_tmp$TIV + 
+#               data_full_tmp$MMSE + 
+#               HAD_A + HAD_D, 
+#             data = data_full_tmp)
+#   res_list[[feature]] <- mod$residuals
+# }
+# res_unlisted <- do.call(cbind, res_list) %>% as.data.frame()
+# colnames(res_unlisted) <- regions
+
+data_full_bu <- cbind(age_group = data_full_tmp$age_group, as.data.frame(res$resid_mtx))
 # Separate predictors and target variable
 x_bu <- model.matrix(age_group ~ ., data_full_bu)[, -1] # discard intercept
 y_bu <- data_full_bu$age_group %>%
@@ -197,38 +104,10 @@ y_bu <- data_full_bu$age_group %>%
 
 
 # Do 10 repeats of 5-fold stratified CV with a grid search across 50 values for λ and alpha
-set.seed(2)
-# nearZeroVar(data_full_bu, saveMetrics = TRUE)
-
-# Threshold-dependent ----
-# cv_glmnet_bu <- caret::train(
-#   x = x_bu,
-#   y = y_bu,
-#   family = "binomial",
-#   method = "glmnet",
-#   trControl = trainControl(
-#     method = "repeatedcv",
-#     index = createFolds(factor(y_bu), 5, returnTrain = T),
-#     number = 5,
-#     repeats = 10,
-#     # The AUC is used to evaluate the classifier to avoid having to make decisions about the classification threshold.
-#     summaryFunction = twoClassSummary, 
-#     classProbs = T,
-#   ),
-#   metric = "Accuracy",
-#   tuneLength = 50
-# )
-
-# Evaluate model performance
-# confusion_matrix <- confusionMatrix(
-#   data = relevel(predict(cv_glmnet_bu, x_bu, "raw"), ref = "Y"),
-#   reference = relevel(y_bu, ref = "Y"),
-#   mode = "everything"
-# )
-
+nearZeroVar(data_full_bu, saveMetrics = TRUE)
 # Threshold-invariant approach ----
 # Set seed for reproducibility
-set.seed(2)
+set.seed(123)
 # Train the model with caret::train
 cv_glmnet_bu <- caret::train(
   x = x_bu,
@@ -240,8 +119,10 @@ cv_glmnet_bu <- caret::train(
     index = createFolds(factor(y_bu), 5, returnTrain = TRUE),
     number = 5,
     repeats = 10,
+    search = "grid",
     summaryFunction = twoClassSummary, # Use AUC for evaluation
-    classProbs = TRUE # Enable class probabilities
+    classProbs = TRUE, # Enable class probabilities
+    verboseIter = T
   ),
   metric = "ROC", # Use ROC as the primary metric
   tuneLength = 50
@@ -282,17 +163,16 @@ elastic_bu <- glmnet(
 # Visualize feature importance
 library(ggplot2)
 library(vip)
-vip_plot <- vip(cv_glmnet_bu, num_features = 3, geom = "col", title = "Top 3 Feature Importance")
+vi <- vi(cv_glmnet_bu, method = "model")
+feature <- vi[1:5,]$Variable # Take the 5 most important variables
+
+vip_plot <- vip(cv_glmnet_bu, num_features = 5, geom = "col")
 vip_plot + theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
-  labs(x = "Feature Importance", y = "Features")
+  labs(x = "Feature Importance", y = "Features") + ggtitle("Multilayer")
 
 # Print coefficients
 cat("Model Coefficients:\n")
-print(coef(elastic_bu))
-
-data_full_bu %>%
-  group_by(age_group) %>%
-  rstatix::get_summary_stats(c(`entorhinal L`, `middletemporal R`, `fusiform L`), type = "full")
+print(coef(elastic_bu)[feature,])
 
 # Visualization with ggseg ----
 library(ggseg)
@@ -322,3 +202,7 @@ ggplot() +
   ) +
   scale_fill_manual(values = c("lightgrey", "darkorange", "darkgreen")) +
   theme_void()
+
+
+
+
