@@ -151,13 +151,24 @@ save('../../output/supra_control.mat','supra_control')
 
 % Calculate nodal EC
 for subj = 1:22
-    OUTPUT.EC.delta(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.generation_delta(subj,:,:))) - eigenvector_centrality_und(squeeze(OUTPUT.control_delta(subj,:,:)));
-    OUTPUT.EC.theta(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.generation_theta(subj,:,:))) - eigenvector_centrality_und(squeeze(OUTPUT.control_theta(subj,:,:)));
-    OUTPUT.EC.alpha(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.generation_alpha(subj,:,:))) - eigenvector_centrality_und(squeeze(OUTPUT.control_alpha(subj,:,:)));
-    OUTPUT.EC.beta(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.generation_beta(subj,:,:))) - eigenvector_centrality_und(squeeze(OUTPUT.control_beta(subj,:,:)));
-    OUTPUT.EC.gamma1(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.generation_gamma1(subj,:,:))) - eigenvector_centrality_und(squeeze(OUTPUT.control_gamma1(subj,:,:)));
-    OUTPUT.EC.gamma2(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.generation_gamma2(subj,:,:))) - eigenvector_centrality_und(squeeze(OUTPUT.control_gamma2(subj,:,:)));
+    fprintf(1, 'Now computing EC for sub %s!\n', num2str(subj))
+    
+    OUTPUT.EC.control.delta(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.control_delta(subj,:,:)));
+    OUTPUT.EC.control.theta(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.control_theta(subj,:,:)));
+    OUTPUT.EC.control.alpha(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.control_alpha(subj,:,:)));
+    OUTPUT.EC.control.beta(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.control_beta(subj,:,:)));
+    OUTPUT.EC.control.gamma1(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.control_gamma1(subj,:,:)));
+    OUTPUT.EC.control.gamma2(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.control_gamma2(subj,:,:)));
+    
+    OUTPUT.EC.generation.delta(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.generation_delta(subj,:,:)));
+    OUTPUT.EC.generation.theta(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.generation_theta(subj,:,:)));
+    OUTPUT.EC.generation.alpha(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.generation_alpha(subj,:,:)));
+    OUTPUT.EC.generation.beta(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.generation_beta(subj,:,:)));
+    OUTPUT.EC.generation.gamma1(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.generation_gamma1(subj,:,:)));
+    OUTPUT.EC.generation.gamma2(subj,:) = eigenvector_centrality_und(squeeze(OUTPUT.generation_gamma2(subj,:,:)));
 end
 
-% monolayer_EC = OUTPUT.EC;
-save('../../output/eigenvector_centrality_monolayer.mat','monolayer_EC')
+monolayer_EC_control = OUTPUT.EC.control;
+save('../../output/eigenvector_centrality_monolayer_control.mat','monolayer_EC_control')
+monolayer_EC_generation = OUTPUT.EC.generation;
+save('../../output/eigenvector_centrality_monolayer_generation.mat','monolayer_EC_generation')

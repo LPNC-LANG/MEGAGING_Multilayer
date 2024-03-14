@@ -22,7 +22,7 @@ multilayer_EC_list_gen_bu <- list()
 multilayer_EC_list_con_bu <- list()
 for (subj in seq(22)) {
   # Load the supra-adjacency matrices
-  supra_gen <- readMat("H:/MEGAGING/output/supra_generation.mat")$supra.generation[, , subj] 
+  supra_gen <- readMat("H:/MEGAGING/output/supra_generation.mat")$supra.generation[, , subj]
   # Compute the binary multilayer EC
   multilayer_EC_list_gen_bu[[subj]] <- muxViz::GetMultiEigenvectorCentrality(binarizeMatrix(supra_gen), 6, 62) %>% t()
 
@@ -41,10 +41,20 @@ multilayer_EC_con_bu <- rbindlist(lapply(multilayer_EC_list_con_bu, as.data.tabl
 # muxViz::plot_multiplex(layers, layout = "auto",
 #                        layer.colors = c("red", "blue", "green", "black", "orange", "purple"))
 
+
 source("H:/MEGAGING/data/metadata.R")
-multilayer_EC_diff_bu <- multilayer_EC_gen_bu - multilayer_EC_con_bu
-rownames(multilayer_EC_diff_bu) <- subjects
-colnames(multilayer_EC_diff_bu) <- regions
+rownames(multilayer_EC_gen_bu) <- subjects
+colnames(multilayer_EC_gen_bu) <- regions
+rownames(multilayer_EC_con_bu) <- subjects
+colnames(multilayer_EC_con_bu) <- regions
+
+data_subjects_gen_bu <- rio::import("H:/MEGAGING/data/list_subjects.xlsx") %>%
+  merge(., multilayer_EC_gen_bu %>% mutate(ID = rownames(.)), by = "ID") %>% 
+  mutate(condition = rep("generation"))
+data_subjects_con_bu <- rio::import("H:/MEGAGING/data/list_subjects.xlsx") %>%
+  merge(., multilayer_EC_con_bu %>% mutate(ID = rownames(.)), by = "ID") %>% 
+  mutate(condition = rep("control"))
+
 
 # Logistic elastic net regression ----
 # https://bradleyboehmke.github.io/HOML/regularized-regression.html
@@ -54,48 +64,40 @@ library(recipes)
 library(ROCR)
 library(vip)
 
-data_subjects_bu <- rio::import("H:/MEGAGING/data/list_subjects.xlsx") %>%
-  merge(., multilayer_EC_diff_bu %>% mutate(ID = rownames(.)), by = "ID") %>%
-  mutate(gender = ifelse(gender == "M", -0.5, 0.5))
-
-data_full_tmp <- data_subjects_bu[, c(
-  15:76 # Multilayer EC
-)] %>% scale() %>% as.data.frame() %>%
+data_full_tmp <- data_subjects_gen_bu %>%
+  mutate(gender = ifelse(gender == "M", -0.5, 0.5)) %>% 
+  .[, c(
+  15:76, # Multilayer EC
+  4 # gender
+)] %>%
   cbind(
-    age_group = data_subjects_bu$age_group,
-    gender = data_subjects_bu$gender,
+    age_group = data_subjects_gen_bu$age_group,
     TIV = as.numeric(scale(TIV)),
-    MMSE = as.numeric(scale(data_subjects_bu$MMSE)),
-    HAD_A = as.numeric(scale(data_subjects_bu$HAD_A)),
-    HAD_D = as.numeric(scale(data_subjects_bu$HAD_D))
-  ) %>%
+    MMSE = as.numeric(scale(data_subjects_gen_bu$MMSE)),
+    HAD_A = as.numeric(scale(data_subjects_gen_bu$HAD_A)),
+    HAD_D = as.numeric(scale(data_subjects_gen_bu$HAD_D))
+  ) %>% 
   relocate(., age_group, .before = colnames(.)[1]) %>%
-  relocate(., gender, .before = colnames(.)[2]) %>% 
-  relocate(., TIV, .before = colnames(.)[3])
+  relocate(., gender, .before = colnames(.)[2]) %>%
+  relocate(., TIV, .before = colnames(.)[3]) %>% 
+  relocate(., gender, .before = colnames(.)[4])
 
 # Regress out nuisance variables ----
-# Script converted from matlab script from Thomas Yeo's lab
-source("H:/MEGAGING/code/Multilayer_LP/CBIG_glm_regress_matrix.R")
-res <- CBIG_glm_regress_matrix(
-  input_mtx = as.matrix(data_full_tmp[,4:65]),
-  regressor = as.matrix(data_full_tmp[,c("TIV","gender","MMSE","HAD_A","HAD_D")]),
-  polynomial_fit = 0)
+res_list = list()
+for (feature in 4:65){
+  mod <- lm(data_full_tmp[,feature] ~
+              data_subjects_con_bu[,11+feature] + # regress out the effect of control
+              data_full_tmp$gender +
+              data_full_tmp$TIV +
+              data_full_tmp$MMSE +
+              HAD_A + HAD_D,
+            data = data_full_tmp)
+  res_list[[feature]] <- mod$residuals
+}
+res_unlisted <- do.call(cbind, res_list) %>% scale() %>% as.data.frame()
+colnames(res_unlisted) <- regions
+data_full_bu <- cbind(age_group = data_full_tmp$age_group, res_unlisted)
 
-# This does the same thing
-# res_list = list()
-# for (feature in 4:65){
-#   mod <- lm(data_full_tmp[,feature] ~ 
-#               data_full_tmp$gender + 
-#               data_full_tmp$TIV + 
-#               data_full_tmp$MMSE + 
-#               HAD_A + HAD_D, 
-#             data = data_full_tmp)
-#   res_list[[feature]] <- mod$residuals
-# }
-# res_unlisted <- do.call(cbind, res_list) %>% as.data.frame()
-# colnames(res_unlisted) <- regions
-
-data_full_bu <- cbind(age_group = data_full_tmp$age_group, as.data.frame(res$resid_mtx))
 # Separate predictors and target variable
 x_bu <- model.matrix(age_group ~ ., data_full_bu)[, -1] # discard intercept
 y_bu <- data_full_bu$age_group %>%
@@ -104,10 +106,10 @@ y_bu <- data_full_bu$age_group %>%
 
 
 # Do 10 repeats of 5-fold stratified CV with a grid search across 50 values for λ and alpha
-nearZeroVar(data_full_bu, saveMetrics = TRUE)
+# nearZeroVar(data_full_bu, saveMetrics = TRUE)
 # Threshold-invariant approach ----
 # Set seed for reproducibility
-set.seed(123)
+set.seed(1653)
 # Train the model with caret::train
 cv_glmnet_bu <- caret::train(
   x = x_bu,
@@ -128,16 +130,6 @@ cv_glmnet_bu <- caret::train(
   tuneLength = 50
 )
 
-# Plot ROC curve
-library(pROC)
-cv_glmnet_prob_bu <- predict(cv_glmnet_bu, x_bu, "prob")$Y
-roc_curve <- roc(data_full_bu$age_group, cv_glmnet_prob_bu)
-auc_score <- auc(roc_curve)
-plot(roc_curve, col = "blue", lty = 1, main = "ROC Curve", xlab = "False Positive Rate", ylab = "True Positive Rate")
-
-# Print AUC
-cat("AUC:", auc_score, "\n")
-
 # Retrieve the best model's hyperparameters
 best_alpha <- cv_glmnet_bu$bestTune$alpha
 best_lambda <- cv_glmnet_bu$bestTune$lambda
@@ -150,6 +142,15 @@ cat("Best Lambda:", best_lambda, "\n")
 cat("Best Results:", "\n")
 print(best_results)
 
+
+# Model Diagnostics ----
+probabilities <- predict(cv_glmnet_bu, newx = x_bu, type = "raw")
+roc_curve <- roc(case_when(y_bu == "O" ~ 1, .default = 0), 
+    case_when(probabilities == "O" ~ 1, .default = 0))
+
+# Plot ROC curve
+plot(roc_curve, main = "ROC Curve", col = "blue")
+
 # Fit the final model with the best hyperparameters
 elastic_bu <- glmnet(
   x_bu,
@@ -157,22 +158,21 @@ elastic_bu <- glmnet(
   family = "binomial",
   alpha = best_alpha,
   lambda = best_lambda,
-  standardize = FALSE  # the dataset was already preprocessed
+  standardize = FALSE # the dataset was already preprocessed
 )
 
 # Visualize feature importance
 library(ggplot2)
 library(vip)
-vi <- vi(cv_glmnet_bu, method = "model")
-feature <- vi[1:5,]$Variable # Take the 5 most important variables
-
-vip_plot <- vip(cv_glmnet_bu, num_features = 5, geom = "col")
-vip_plot + theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
-  labs(x = "Feature Importance", y = "Features") + ggtitle("Multilayer")
+vi <- vi(cv_glmnet_bu)
+feature <- vi[1:5, ]$Variable # Take the 5 most important variables
+print(vi)
+quantile(as.numeric(unlist(vi[,2])))
 
 # Print coefficients
 cat("Model Coefficients:\n")
-print(coef(elastic_bu)[feature,])
+print(coef(elastic_bu)[feature, ])
+plot(varImp(cv_glmnet_bu), top = 5)
 
 # Visualization with ggseg ----
 library(ggseg)
@@ -185,24 +185,22 @@ ggplot() +
     atlas = atlas_dkt %>%
       mutate(
         ACTIVATION =
-          ifelse(hemi == "left" & region == "entorhinal", 1,
-            ifelse(hemi == "left" & region == "fusiform", 1,
-              ifelse(hemi == "right" & region == "middle temporal", 2,
-                0
-              )
-            )
+          case_when(
+            # increase multilayer EC with age
+            hemi == "left" & region == "fusiform" ~ 1,
+            hemi == "left" & region == "entorhinal" ~ 1,
+            # decrease multilayer EC with age
+            hemi == "right" & region == "inferior temporal" ~ 2,
+            hemi == "right" & region == "superior frontal" ~ 2,
+            .default = 0
           )
       ),
-    # ))),
     mapping = aes(fill = as.factor(ACTIVATION)),
     position = position_brain("horizontal"),
     size = 0.5,
     color = "black",
     show.legend = F
   ) +
-  scale_fill_manual(values = c("lightgrey", "darkorange", "darkgreen")) +
+  scale_fill_manual(values = c("lightgrey", "#DD3131", "#357FA7")) +
   theme_void()
-
-
-
 
